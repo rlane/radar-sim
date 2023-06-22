@@ -41,14 +41,19 @@ async fn execute_gpu(numbers: &[f32]) {
     println!("Result: {sum}",);
     assert_eq!(sum, 274341298176.0);
 
-    for _ in 0..100 {
-        let n = 100;
+    loop {
         let start_time = std::time::Instant::now();
-        for _ in 0..n {
+        let mut i = 0;
+        while start_time.elapsed() < std::time::Duration::from_secs(1) {
             let _ = execute_gpu_inner(&device, &queue, &pass, numbers).await;
+            i += 1;
         }
         let elapsed = start_time.elapsed();
-        println!("Average time per iteration: {:?}", elapsed / n);
+        println!(
+            "Average time per iteration: {:?} MFLOPS: {:?}",
+            elapsed / i,
+            1e-6 * i as f64 * numbers.len() as f64 * numbers.len() as f64 / elapsed.as_secs_f64()
+        );
     }
 }
 
