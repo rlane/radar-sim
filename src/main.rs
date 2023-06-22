@@ -207,32 +207,10 @@ async fn execute_gpu_inner(
         pass.output_storage_buffer.size(),
     );
 
-    let start_time = std::time::Instant::now();
-
-    // Submits command encoder for processing
     let id = queue.submit(Some(encoder.finish()));
-    let buffer_slice = pass.output_staging_buffer.slice(..);
-    let data = map_buffer(&device, &buffer_slice, id).unwrap();
+    let data: Vec<f32> = download_buffer(&device, &pass.output_staging_buffer, id).unwrap();
 
-    if false {
-        let elapsed = start_time.elapsed();
-        println!("Elapsed: {}ms", elapsed.as_millis());
-    }
-
-    // Since contents are got in bytes, this converts these bytes back to f32
-    let result = bytemuck::cast_slice(&data).to_vec();
-
-    // With the current interface, we have to make sure all mapped views are
-    // dropped before we unmap the buffer.
-    drop(data);
-    pass.output_staging_buffer.unmap(); // Unmaps buffer from memory
-                                        // If you are familiar with C++ these 2 lines can be thought of similarly to:
-                                        //   delete myPointer;
-                                        //   myPointer = NULL;
-                                        // It effectively frees the memory
-
-    // Returns data from buffer
-    return Some(result);
+    return Some(data);
 }
 
 fn main() {
@@ -240,18 +218,26 @@ fn main() {
     pollster::block_on(run());
 }
 
-fn map_buffer<'a>(
+fn download_buffer<T>(
     device: &wgpu::Device,
-    buffer_slice: &'a wgpu::BufferSlice,
+    buffer: &wgpu::Buffer,
     id: SubmissionIndex,
-) -> Result<wgpu::BufferView<'a>, wgpu::BufferAsyncError> {
+) -> Result<Vec<T>, wgpu::BufferAsyncError>
+where
+    T: bytemuck::Pod,
+{
     let (sender, receiver) = std::sync::mpsc::channel();
+    let buffer_slice = buffer.slice(..);
     buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
         drop(sender.send(v));
     });
     device.poll(wgpu::Maintain::WaitForSubmissionIndex(id));
     receiver.recv().unwrap()?;
-    Ok(buffer_slice.get_mapped_range())
+    let view = buffer_slice.get_mapped_range();
+    let data = bytemuck::cast_slice(&view).to_vec();
+    drop(view);
+    buffer.unmap();
+    Ok(data)
 }
 
 fn upload_buffer(
