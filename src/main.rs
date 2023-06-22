@@ -8,6 +8,16 @@ async fn run() {
     execute_gpu(&numbers).await;
 }
 
+fn calculate_cpu(numbers: &[f32]) -> f64 {
+    let mut expected: f64 = 0.0;
+    for i in 0..numbers.len() {
+        for j in 0..numbers.len() {
+            expected += std::hint::black_box(numbers[i] * numbers[j]) as f64;
+        }
+    }
+    expected
+}
+
 async fn execute_gpu(numbers: &[f32]) {
     // Instantiates instance of WebGPU
     let instance = wgpu::Instance::default();
@@ -39,21 +49,30 @@ async fn execute_gpu(numbers: &[f32]) {
         .unwrap();
     let sum = result.iter().copied().map(|x| x as f64).sum::<f64>();
     println!("Result: {sum}",);
-    assert_eq!(sum, 274341298176.0);
+
+    assert_eq!(sum, calculate_cpu(numbers));
 
     loop {
-        let start_time = std::time::Instant::now();
-        let mut i = 0;
-        while start_time.elapsed() < std::time::Duration::from_secs(1) {
-            let _ = execute_gpu_inner(&device, &queue, &pass, numbers).await;
-            i += 1;
+        for gpu in [true, false] {
+            let start_time = std::time::Instant::now();
+            let mut i = 0;
+            while start_time.elapsed() < std::time::Duration::from_secs(1) {
+                if gpu {
+                    let _ = execute_gpu_inner(&device, &queue, &pass, numbers).await;
+                } else {
+                    std::hint::black_box(calculate_cpu(numbers));
+                }
+                i += 1;
+            }
+            let elapsed = start_time.elapsed();
+            println!(
+                "{} Iteration time: {:.1?} mega-op/s: {:.1?}",
+                if gpu { "GPU" } else { "CPU" },
+                elapsed / i,
+                1e-6 * i as f64 * numbers.len() as f64 * numbers.len() as f64
+                    / elapsed.as_secs_f64()
+            );
         }
-        let elapsed = start_time.elapsed();
-        println!(
-            "Average time per iteration: {:?} MFLOPS: {:?}",
-            elapsed / i,
-            1e-6 * i as f64 * numbers.len() as f64 * numbers.len() as f64 / elapsed.as_secs_f64()
-        );
     }
 }
 
