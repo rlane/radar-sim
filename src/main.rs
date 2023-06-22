@@ -220,7 +220,7 @@ async fn execute_gpu_inner(
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
         cpass.set_pipeline(&pass.compute_pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
-        cpass.dispatch_workgroups(numbers.len() as u32 / 16, numbers.len() as u32 / 16, 1);
+        cpass.dispatch_workgroups(numbers.len() as u32 / 256, numbers.len() as u32, 1);
     }
 
     encoder.copy_buffer_to_buffer(

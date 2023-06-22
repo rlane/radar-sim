@@ -15,7 +15,7 @@ struct Config {
 var<storage, read> config: Config;
 
 @compute
-@workgroup_size(16, 16, 1)
+@workgroup_size(256, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     output[global_id.x + global_id.y * config.num_items] = items[global_id.x] * items[global_id.y];
 }
