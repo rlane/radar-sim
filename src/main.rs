@@ -54,7 +54,7 @@ async fn execute_gpu(numbers: &[f32]) {
 }
 
 struct RadarComputePass {
-    cs_module: wgpu::ShaderModule,
+    compute_pipeline: wgpu::ComputePipeline,
 }
 
 async fn create_radar_compute_pass(device: &wgpu::Device) -> RadarComputePass {
@@ -64,7 +64,14 @@ async fn create_radar_compute_pass(device: &wgpu::Device) -> RadarComputePass {
         source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
     });
 
-    RadarComputePass { cs_module }
+    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: None,
+        module: &cs_module,
+        entry_point: "main",
+    });
+
+    RadarComputePass { compute_pipeline }
 }
 
 async fn execute_gpu_inner(
@@ -76,23 +83,19 @@ async fn execute_gpu_inner(
     let items_storage_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("items Storage Buffer"),
         contents: bytemuck::cast_slice(numbers),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::STORAGE,
     });
 
     let config_storage_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("config Storage Buffer"),
         contents: bytemuck::cast_slice(&[numbers.len() as u32]),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::STORAGE,
     });
 
     // Gets the size in bytes of the output buffer.
     let output_size =
         (numbers.len() * numbers.len()) as u64 * std::mem::size_of::<f32>() as wgpu::BufferAddress;
 
-    // Instantiates buffer without data.
-    // `usage` of buffer specifies how it can be used:
-    //   `BufferUsages::MAP_READ` allows it to be read (outside the shader).
-    //   `BufferUsages::COPY_DST` allows it to be the destination of the copy.
     let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: output_size,
@@ -109,22 +112,7 @@ async fn execute_gpu_inner(
         mapped_at_creation: false,
     });
 
-    // A bind group defines how buffers are accessed by shaders.
-    // It is to WebGPU what a descriptor set is to Vulkan.
-    // `binding` here refers to the `binding` of a buffer in the shader (`layout(set = 0, binding = 0) buffer`).
-
-    // A pipeline specifies the operation of a shader
-
-    // Instantiates the pipeline.
-    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: None,
-        layout: None,
-        module: &pass.cs_module,
-        entry_point: "main",
-    });
-
-    // Instantiates the bind group, once again specifying the binding of buffers.
-    let bind_group_layout = compute_pipeline.get_bind_group_layout(0);
+    let bind_group_layout = pass.compute_pipeline.get_bind_group_layout(0);
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,
@@ -150,7 +138,7 @@ async fn execute_gpu_inner(
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
-        cpass.set_pipeline(&compute_pipeline);
+        cpass.set_pipeline(&pass.compute_pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
         cpass.dispatch_workgroups(numbers.len() as u32 / 16, numbers.len() as u32 / 16, 1);
         // Number of cells to run, the (x,y,z) size of item being processed
