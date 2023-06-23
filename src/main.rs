@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use wgpu::SubmissionIndex;
 
+const WORKGROUP_SIZE: u32 = 256;
+
 async fn run() {
     let numbers = (0..1024).map(|x| x as f32).collect::<Vec<_>>();
 
@@ -52,7 +54,7 @@ async fn execute_gpu(numbers: &[f32]) {
 
     assert_eq!(sum, calculate_cpu(numbers));
 
-    loop {
+    for _ in 0..10 {
         for gpu in [true, false] {
             let start_time = std::time::Instant::now();
             let mut i = 0;
@@ -102,7 +104,8 @@ async fn create_radar_compute_pass(device: &wgpu::Device, len: usize) -> RadarCo
 
     let config_size = std::mem::size_of::<u32>() as wgpu::BufferAddress;
     let items_size = len as u64 * std::mem::size_of::<f32>() as wgpu::BufferAddress;
-    let output_size = (len * len) as u64 * std::mem::size_of::<f32>() as wgpu::BufferAddress;
+    let output_size = (len * len / WORKGROUP_SIZE as usize) as u64
+        * std::mem::size_of::<f32>() as wgpu::BufferAddress;
 
     let config_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("config staging buffer"),
@@ -220,7 +223,11 @@ async fn execute_gpu_inner(
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
         cpass.set_pipeline(&pass.compute_pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
-        cpass.dispatch_workgroups(numbers.len() as u32 / 256, numbers.len() as u32, 1);
+        cpass.dispatch_workgroups(
+            numbers.len() as u32 / WORKGROUP_SIZE,
+            numbers.len() as u32,
+            1,
+        );
     }
 
     encoder.copy_buffer_to_buffer(
@@ -232,8 +239,8 @@ async fn execute_gpu_inner(
     );
 
     let id = queue.submit(Some(encoder.finish()));
-    let data: Vec<f32> = download_buffer(&device, &pass.output_staging_buffer, id).unwrap();
 
+    let data: Vec<f32> = download_buffer(&device, &pass.output_staging_buffer, id).unwrap();
     return Some(data);
 }
 
