@@ -2,6 +2,7 @@ use bytemuck::{Pod, Zeroable};
 use nalgebra::{vector, Vector2};
 use rand::Rng;
 use std::borrow::Cow;
+use std::f32::consts::TAU;
 use std::sync::Arc;
 use wgpu::SubmissionIndex;
 
@@ -20,7 +21,7 @@ struct Config {
 struct Emitter {
     position: Vector2<f32>,
     angle: f32,
-    pad: f32,
+    beamwidth: f32,
 }
 
 #[derive(Pod, Zeroable, Copy, Clone, Debug)]
@@ -45,8 +46,8 @@ async fn run() {
     for _ in 0..1000 {
         emitters.push(Emitter {
             position: vector![rng.gen_range(-1e3..1e3), rng.gen_range(-1e3..1e3)],
-            angle: 1.0,
-            pad: 0.0,
+            angle: rng.gen_range(0.0..TAU),
+            beamwidth: rng.gen_range((TAU / 360.0)..TAU),
         });
     }
 
@@ -448,7 +449,7 @@ fn test_basic() {
     let emitters = vec![Emitter {
         position: vector![0.0, 0.0],
         angle: 0.0,
-        pad: 0.0,
+        beamwidth: TAU,
     }];
 
     let reflectors = vec![Reflector {
@@ -471,7 +472,7 @@ fn test_position() {
     let emitters = vec![Emitter {
         position: vector![1000.0, 0.0],
         angle: 0.0,
-        pad: 0.0,
+        beamwidth: TAU,
     }];
 
     let reflectors = vec![Reflector {
@@ -494,7 +495,7 @@ fn test_two_reflectors() {
     let emitters = vec![Emitter {
         position: vector![1000.0, 0.0],
         angle: 0.0,
-        pad: 0.0,
+        beamwidth: TAU,
     }];
 
     let reflectors = vec![
@@ -524,7 +525,7 @@ fn test_rcs() {
     let emitters = vec![Emitter {
         position: vector![0.0, 0.0],
         angle: 0.0,
-        pad: 0.0,
+        beamwidth: TAU,
     }];
 
     let reflectors = vec![
@@ -555,12 +556,12 @@ fn test_two_emitters() {
         Emitter {
             position: vector![1000.0, 0.0],
             angle: 0.0,
-            pad: 0.0,
+            beamwidth: TAU,
         },
         Emitter {
             position: vector![2000.0, 0.0],
             angle: 0.0,
-            pad: 0.0,
+            beamwidth: TAU,
         },
     ];
 
@@ -588,6 +589,36 @@ fn test_two_emitters() {
 }
 
 #[test]
+fn test_beam() {
+    use assert_float_eq::*;
+    let emitters = vec![Emitter {
+        position: vector![1000.0, 0.0],
+        angle: 0.0,
+        beamwidth: TAU / 4.0,
+    }];
+
+    let reflectors = vec![
+        Reflector {
+            position: vector![1000.0, 1000.0],
+            rcs: 1.0,
+            pad: 0.0,
+        },
+        Reflector {
+            position: vector![1000.0, 500.0],
+            rcs: 1.0,
+            pad: 0.0,
+        },
+    ];
+
+    for gpu in [false, true] {
+        let outputs = calculate_for_test(&emitters, &reflectors, gpu);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].reflector, 1);
+        assert_float_relative_eq!(outputs[0].rssi, 1.6e-11);
+    }
+}
+
+#[test]
 fn test_random() {
     use assert_float_eq::*;
 
@@ -597,8 +628,8 @@ fn test_random() {
     for _ in 0..1000 {
         emitters.push(Emitter {
             position: vector![rng.gen_range(-1e3..1e3), rng.gen_range(-1e3..1e3)],
-            angle: rng.gen_range(0.0..std::f32::consts::TAU),
-            pad: 0.0,
+            angle: rng.gen_range(0.0..TAU),
+            beamwidth: rng.gen_range((TAU / 360.0)..TAU),
         });
     }
 

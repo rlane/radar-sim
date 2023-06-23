@@ -9,6 +9,7 @@ struct Config {
 struct Emitter {
   position: vec2<f32>,
   angle: f32,
+  beamwidth: f32,
 }
 
 struct Reflector {
