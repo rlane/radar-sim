@@ -1,4 +1,4 @@
-const WORKGROUP_SIZE: u32 = 256u;
+const WORKGROUP_SIZE: u32 = 128u;
 
 @group(0)
 @binding(0)
@@ -19,7 +19,7 @@ var<storage, read> config: Config;
 var<workgroup> local_sums: array<f32, WORKGROUP_SIZE>;
 
 @compute
-@workgroup_size(256, 1, 1)
+@workgroup_size(128, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) group_id: vec3<u32>, @builtin(num_workgroups) num_workgroups: vec3<u32>) {
     if global_id.x < config.num_items && global_id.y < config.num_items {
         local_sums[local_id.x] = items[global_id.x] * items[global_id.y];

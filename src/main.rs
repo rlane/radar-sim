@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use wgpu::SubmissionIndex;
 
-const WORKGROUP_SIZE: u32 = 256;
+const WORKGROUP_SIZE: u32 = 128;
 
 async fn run() {
     let numbers = (0..513).map(|x| x as f32).collect::<Vec<_>>();
