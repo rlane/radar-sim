@@ -5,7 +5,7 @@ use wgpu::SubmissionIndex;
 const WORKGROUP_SIZE: u32 = 128;
 
 async fn run() {
-    let numbers = (0..513).map(|x| x as f32).collect::<Vec<_>>();
+    let numbers = (0..1023).map(|x| x as f32).collect::<Vec<_>>();
 
     let instance = wgpu::Instance::default();
     let mut opts = wgpu::RequestAdapterOptions::default();
@@ -27,10 +27,13 @@ async fn run() {
     let pass = create_compute_pass(&device, numbers.len()).await;
     let device = Arc::new(device);
 
-    let result = calculate_gpu(&device, &queue, &pass, &numbers).await;
-    println!("Result: {result}",);
+    let gpu_result = calculate_gpu(&device, &queue, &pass, &numbers).await;
+    println!("GPU result: {gpu_result}",);
 
-    assert_eq!(result, calculate_cpu(&numbers));
+    let cpu_result = calculate_cpu(&numbers);
+    println!("CPU result: {cpu_result}",);
+
+    assert!((gpu_result - cpu_result).abs() < 1.0);
 
     for _ in 0..10 {
         for gpu in [false, true] {
@@ -60,7 +63,9 @@ fn calculate_cpu(numbers: &[f32]) -> f64 {
     let mut expected: f64 = 0.0;
     for i in 0..numbers.len() {
         for j in 0..numbers.len() {
-            expected += std::hint::black_box(numbers[i] * numbers[j]) as f64;
+            expected +=
+                std::hint::black_box(numbers[i].max(1.0).log2() * numbers[j].max(1.0).log2())
+                    as f64;
         }
     }
     expected

@@ -22,7 +22,7 @@ var<workgroup> local_sums: array<f32, WORKGROUP_SIZE>;
 @workgroup_size(128, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) group_id: vec3<u32>, @builtin(num_workgroups) num_workgroups: vec3<u32>) {
     if global_id.x < config.num_items && global_id.y < config.num_items {
-        local_sums[local_id.x] = items[global_id.x] * items[global_id.y];
+        local_sums[local_id.x] = calculate(global_id);
     } else {
         local_sums[local_id.x] = 0.0;
     }
@@ -38,4 +38,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invo
     if local_id.x == 0u {
         output[group_id.x + group_id.y * num_workgroups.x] = local_sums[0];
     }
+}
+
+fn calculate(global_id: vec3<u32>) -> f32 {
+    let a = items[global_id.x];
+    let b = items[global_id.y];
+    return log2(max(a, 1.0)) * log2(max(b, 1.0));
 }
