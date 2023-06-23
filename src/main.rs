@@ -408,3 +408,215 @@ fn upload_buffer(
     buffer.unmap();
     Ok(())
 }
+
+#[cfg(test)]
+fn calculate_for_test(emitters: &[Emitter], reflectors: &[Reflector], gpu: bool) -> Vec<Output> {
+    if gpu {
+        let instance = wgpu::Instance::default();
+        let mut opts = wgpu::RequestAdapterOptions::default();
+        opts.power_preference = wgpu::PowerPreference::HighPerformance;
+        let adapter = pollster::block_on(instance.request_adapter(&opts)).unwrap();
+
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: None,
+                features: wgpu::Features::empty(),
+                limits: wgpu::Limits::downlevel_defaults(),
+            },
+            None,
+        ))
+        .unwrap();
+
+        let pass = pollster::block_on(create_compute_pass(&device));
+        let device = Arc::new(device);
+
+        pollster::block_on(calculate_gpu(
+            &device,
+            &queue,
+            &pass,
+            &emitters,
+            &reflectors,
+        ))
+    } else {
+        calculate_cpu(&emitters, &reflectors)
+    }
+}
+
+#[test]
+fn test_basic() {
+    use assert_float_eq::*;
+    let emitters = vec![Emitter {
+        position: vector![0.0, 0.0],
+        angle: 0.0,
+        pad: 0.0,
+    }];
+
+    let reflectors = vec![Reflector {
+        position: vector![1000.0, 0.0],
+        rcs: 1.0,
+        pad: 0.0,
+    }];
+
+    for gpu in [false, true] {
+        let outputs = calculate_for_test(&emitters, &reflectors, gpu);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].reflector, 0);
+        assert_float_relative_eq!(outputs[0].rssi, 1e-12);
+    }
+}
+
+#[test]
+fn test_position() {
+    use assert_float_eq::*;
+    let emitters = vec![Emitter {
+        position: vector![1000.0, 0.0],
+        angle: 0.0,
+        pad: 0.0,
+    }];
+
+    let reflectors = vec![Reflector {
+        position: vector![1000.0, 1000.0],
+        rcs: 1.0,
+        pad: 0.0,
+    }];
+
+    for gpu in [false, true] {
+        let outputs = calculate_for_test(&emitters, &reflectors, gpu);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].reflector, 0);
+        assert_float_relative_eq!(outputs[0].rssi, 1e-12);
+    }
+}
+
+#[test]
+fn test_two_reflectors() {
+    use assert_float_eq::*;
+    let emitters = vec![Emitter {
+        position: vector![1000.0, 0.0],
+        angle: 0.0,
+        pad: 0.0,
+    }];
+
+    let reflectors = vec![
+        Reflector {
+            position: vector![1000.0, 1000.0],
+            rcs: 1.0,
+            pad: 0.0,
+        },
+        Reflector {
+            position: vector![1000.0, 500.0],
+            rcs: 1.0,
+            pad: 0.0,
+        },
+    ];
+
+    for gpu in [false, true] {
+        let outputs = calculate_for_test(&emitters, &reflectors, gpu);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].reflector, 1);
+        assert_float_relative_eq!(outputs[0].rssi, 1.6e-11);
+    }
+}
+
+#[test]
+fn test_rcs() {
+    use assert_float_eq::*;
+    let emitters = vec![Emitter {
+        position: vector![0.0, 0.0],
+        angle: 0.0,
+        pad: 0.0,
+    }];
+
+    let reflectors = vec![
+        Reflector {
+            position: vector![1000.0, 0.0],
+            rcs: 1.0,
+            pad: 0.0,
+        },
+        Reflector {
+            position: vector![2000.0, 0.0],
+            rcs: 100.0,
+            pad: 0.0,
+        },
+    ];
+
+    for gpu in [false, true] {
+        let outputs = calculate_for_test(&emitters, &reflectors, gpu);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].reflector, 1);
+        assert_float_relative_eq!(outputs[0].rssi, 6.25e-12);
+    }
+}
+
+#[test]
+fn test_two_emitters() {
+    use assert_float_eq::*;
+    let emitters = vec![
+        Emitter {
+            position: vector![1000.0, 0.0],
+            angle: 0.0,
+            pad: 0.0,
+        },
+        Emitter {
+            position: vector![2000.0, 0.0],
+            angle: 0.0,
+            pad: 0.0,
+        },
+    ];
+
+    let reflectors = vec![
+        Reflector {
+            position: vector![0.0, 0.0],
+            rcs: 1.0,
+            pad: 0.0,
+        },
+        Reflector {
+            position: vector![3000.0, 0.0],
+            rcs: 1.0,
+            pad: 0.0,
+        },
+    ];
+
+    for gpu in [false, true] {
+        let outputs = calculate_for_test(&emitters, &reflectors, gpu);
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].reflector, 0);
+        assert_float_relative_eq!(outputs[0].rssi, 1e-12);
+        assert_eq!(outputs[1].reflector, 1);
+        assert_float_relative_eq!(outputs[1].rssi, 1e-12);
+    }
+}
+
+#[test]
+fn test_random() {
+    use assert_float_eq::*;
+
+    let mut rng = rand::thread_rng();
+
+    let mut emitters = vec![];
+    for _ in 0..1000 {
+        emitters.push(Emitter {
+            position: vector![rng.gen_range(-1e3..1e3), rng.gen_range(-1e3..1e3)],
+            angle: rng.gen_range(0.0..std::f32::consts::TAU),
+            pad: 0.0,
+        });
+    }
+
+    let mut reflectors = vec![];
+    for _ in 0..1000 {
+        reflectors.push(Reflector {
+            position: vector![rng.gen_range(-1e3..1e3), rng.gen_range(-1e3..1e3)],
+            rcs: rng.gen_range(0.1..10.0),
+            pad: 0.0,
+        });
+    }
+
+    let cpu_outputs = calculate_for_test(&emitters, &reflectors, false);
+    let gpu_outputs = calculate_for_test(&emitters, &reflectors, true);
+
+    assert_eq!(cpu_outputs.len(), gpu_outputs.len());
+    for i in 0..cpu_outputs.len() {
+        assert_eq!(cpu_outputs[i].reflector, gpu_outputs[i].reflector);
+        assert_float_relative_eq!(cpu_outputs[i].rssi, gpu_outputs[i].rssi, 1e-3);
+    }
+}
