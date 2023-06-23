@@ -43,5 +43,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invo
 fn calculate(global_id: vec3<u32>) -> f32 {
     let a = items[global_id.x];
     let b = items[global_id.y];
-    return log2(max(a, 1.0)) * log2(max(b, 1.0));
+    let n = f32(config.num_items);
+    return log2(max(a, 1.0)) * log2(max(b, 1.0)) / (n * n);
 }

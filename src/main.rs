@@ -59,13 +59,14 @@ async fn run() {
     }
 }
 
-fn calculate_cpu(numbers: &[f32]) -> f64 {
-    let mut expected: f64 = 0.0;
+fn calculate_cpu(numbers: &[f32]) -> f32 {
+    let mut expected: f32 = 0.0;
+    let n = numbers.len() as f32;
     for i in 0..numbers.len() {
         for j in 0..numbers.len() {
             expected +=
                 std::hint::black_box(numbers[i].max(1.0).log2() * numbers[j].max(1.0).log2())
-                    as f64;
+                    / (n * n);
         }
     }
     expected
@@ -159,7 +160,7 @@ async fn calculate_gpu(
     queue: &wgpu::Queue,
     pass: &ComputePass,
     numbers: &[f32],
-) -> f64 {
+) -> f32 {
     let bind_group_layout = pass.compute_pipeline.get_bind_group_layout(0);
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
@@ -235,7 +236,7 @@ async fn calculate_gpu(
     let id = queue.submit(Some(encoder.finish()));
 
     let data: Vec<f32> = download_buffer(&device, &pass.output_staging_buffer, id).unwrap();
-    data.iter().copied().map(|x| x as f64).sum::<f64>()
+    data.iter().copied().sum()
 }
 
 fn main() {
