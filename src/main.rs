@@ -5,7 +5,7 @@ use wgpu::SubmissionIndex;
 const WORKGROUP_SIZE: u32 = 256;
 
 async fn run() {
-    let numbers = (0..1024).map(|x| x as f32).collect::<Vec<_>>();
+    let numbers = (0..513).map(|x| x as f32).collect::<Vec<_>>();
 
     execute_gpu(&numbers).await;
 }
@@ -104,7 +104,8 @@ async fn create_radar_compute_pass(device: &wgpu::Device, len: usize) -> RadarCo
 
     let config_size = std::mem::size_of::<u32>() as wgpu::BufferAddress;
     let items_size = len as u64 * std::mem::size_of::<f32>() as wgpu::BufferAddress;
-    let output_size = (len * len / WORKGROUP_SIZE as usize) as u64
+    let output_size = (len * ((len + WORKGROUP_SIZE as usize - 1) / WORKGROUP_SIZE as usize))
+        as u64
         * std::mem::size_of::<f32>() as wgpu::BufferAddress;
 
     let config_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -224,7 +225,7 @@ async fn execute_gpu_inner(
         cpass.set_pipeline(&pass.compute_pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
         cpass.dispatch_workgroups(
-            numbers.len() as u32 / WORKGROUP_SIZE,
+            (numbers.len() as u32 + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE,
             numbers.len() as u32,
             1,
         );
