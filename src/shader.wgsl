@@ -1,48 +1,75 @@
 const WORKGROUP_SIZE: u32 = 128u;
+const INVALID_ID: u32 = 0xffffffffu;
+
+struct Config {
+  num_emitters: u32,
+  num_reflectors: u32
+}
+
+struct Emitter {
+  position: vec2<f32>,
+  angle: f32,
+}
+
+struct Reflector {
+  position: vec2<f32>,
+  rcs: f32,
+}
+
+struct Output {
+  reflector: u32,
+  rssi: f32,
+}
 
 @group(0)
 @binding(0)
-var<storage, read> items: array<f32>;
+var<storage, read> config: Config;
 
 @group(0)
 @binding(1)
-var<storage, write> output: array<f32>;
-
-struct Config {
-    num_items: u32
-};
+var<storage, read> emitters: array<Emitter>;
 
 @group(0)
 @binding(2)
-var<storage, read> config: Config;
+var<storage, read> reflectors: array<Reflector>;
 
-var<workgroup> local_sums: array<f32, WORKGROUP_SIZE>;
+@group(0)
+@binding(3)
+var<storage, write> output: array<Output>;
+
+var<workgroup> local_output: array<Output, WORKGROUP_SIZE>;
 
 @compute
 @workgroup_size(128, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) group_id: vec3<u32>, @builtin(num_workgroups) num_workgroups: vec3<u32>) {
-    if global_id.x < config.num_items && global_id.y < config.num_items {
-        local_sums[local_id.x] = calculate(global_id);
+    let emitter_index = global_id.y;
+    let reflector_index = global_id.x;
+
+    if emitter_index < config.num_emitters && reflector_index < config.num_reflectors {
+        local_output[local_id.x] = calculate(emitter_index, reflector_index);
     } else {
-        local_sums[local_id.x] = 0.0;
+        local_output[local_id.x] = Output(INVALID_ID, 0.0);
     }
 
     for (var stride: u32 = WORKGROUP_SIZE / 2u; stride > 0u; stride /= 2u) {
         workgroupBarrier();
 
         if local_id.x < stride {
-            local_sums[local_id.x] += local_sums[local_id.x + stride] ;
+            if local_output[local_id.x].rssi < local_output[local_id.x + stride].rssi {
+                local_output[local_id.x] = local_output[local_id.x + stride];
+            }
         }
     }
 
     if local_id.x == 0u {
-        output[group_id.x + group_id.y * num_workgroups.x] = local_sums[0];
+        output[group_id.x + group_id.y * num_workgroups.x] = local_output[0];
     }
 }
 
-fn calculate(global_id: vec3<u32>) -> f32 {
-    let a = items[global_id.x];
-    let b = items[global_id.y];
-    let n = f32(config.num_items);
-    return log2(max(a, 1.0)) * log2(max(b, 1.0)) / (n * n);
+fn calculate(emitter_index: u32, reflector_index: u32) -> Output {
+    let emitter = emitters[emitter_index];
+    let reflector = reflectors[reflector_index];
+    let distance = distance(emitter.position, reflector.position);
+    let rssi = reflector.rcs / pow(distance, 4.0);
+    return Output(reflector_index, rssi);
 }

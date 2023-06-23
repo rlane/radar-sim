@@ -1,11 +1,63 @@
+use bytemuck::{Pod, Zeroable};
+use nalgebra::{vector, Vector2};
+use rand::Rng;
 use std::borrow::Cow;
 use std::sync::Arc;
 use wgpu::SubmissionIndex;
 
 const WORKGROUP_SIZE: u32 = 128;
+const INVALID_ID: u32 = 0xffffffff;
+
+#[derive(Pod, Zeroable, Copy, Clone, Debug)]
+#[repr(C)]
+struct Config {
+    num_emitters: u32,
+    num_reflectors: u32,
+}
+
+#[derive(Pod, Zeroable, Copy, Clone, Debug)]
+#[repr(C)]
+struct Emitter {
+    position: Vector2<f32>,
+    angle: f32,
+    pad: f32,
+}
+
+#[derive(Pod, Zeroable, Copy, Clone, Debug)]
+#[repr(C)]
+struct Reflector {
+    position: Vector2<f32>,
+    rcs: f32,
+    pad: f32,
+}
+
+#[derive(Pod, Zeroable, Copy, Clone, Debug)]
+#[repr(C)]
+struct Output {
+    reflector: u32,
+    rssi: f32,
+}
 
 async fn run() {
-    let numbers = (0..1023).map(|x| x as f32).collect::<Vec<_>>();
+    let mut rng = rand::thread_rng();
+
+    let mut emitters = vec![];
+    for _ in 0..1000 {
+        emitters.push(Emitter {
+            position: vector![rng.gen_range(-1e3..1e3), rng.gen_range(-1e3..1e3)],
+            angle: 1.0,
+            pad: 0.0,
+        });
+    }
+
+    let mut reflectors = vec![];
+    for _ in 0..1000 {
+        reflectors.push(Reflector {
+            position: vector![rng.gen_range(-1e3..1e3), rng.gen_range(-1e3..1e3)],
+            rcs: 1.0,
+            pad: 0.0,
+        });
+    }
 
     let instance = wgpu::Instance::default();
     let mut opts = wgpu::RequestAdapterOptions::default();
@@ -24,16 +76,19 @@ async fn run() {
         .await
         .unwrap();
 
-    let pass = create_compute_pass(&device, numbers.len()).await;
+    let pass = create_compute_pass(&device).await;
     let device = Arc::new(device);
 
-    let gpu_result = calculate_gpu(&device, &queue, &pass, &numbers).await;
-    println!("GPU result: {gpu_result}",);
+    let gpu_result = calculate_gpu(&device, &queue, &pass, &emitters, &reflectors).await;
+    //println!("GPU result: {gpu_result:?}",);
 
-    let cpu_result = calculate_cpu(&numbers);
-    println!("CPU result: {cpu_result}",);
+    let cpu_result = calculate_cpu(&emitters, &reflectors);
+    //println!("CPU result: {cpu_result:?}",);
 
-    assert!((gpu_result - cpu_result).abs() < 1.0);
+    for i in 0..emitters.len() {
+        assert_eq!(gpu_result[i].reflector, cpu_result[i].reflector);
+        assert!((gpu_result[i].rssi - cpu_result[i].rssi).abs() < 1.0);
+    }
 
     for _ in 0..10 {
         for gpu in [false, true] {
@@ -41,9 +96,11 @@ async fn run() {
             let mut i = 0;
             while start_time.elapsed() < std::time::Duration::from_secs(1) {
                 if gpu {
-                    std::hint::black_box(calculate_gpu(&device, &queue, &pass, &numbers).await);
+                    std::hint::black_box(
+                        calculate_gpu(&device, &queue, &pass, &emitters, &reflectors).await,
+                    );
                 } else {
-                    std::hint::black_box(calculate_cpu(&numbers));
+                    std::hint::black_box(calculate_cpu(&emitters, &reflectors));
                 }
                 i += 1;
             }
@@ -52,37 +109,51 @@ async fn run() {
                 "{} Iteration time: {:.1?} mega-op/s: {:.1?}",
                 if gpu { "GPU" } else { "CPU" },
                 elapsed / i,
-                1e-6 * i as f64 * numbers.len() as f64 * numbers.len() as f64
+                1e-6 * i as f64 * emitters.len() as f64 * reflectors.len() as f64
                     / elapsed.as_secs_f64()
             );
         }
     }
 }
 
-fn calculate_cpu(numbers: &[f32]) -> f32 {
-    let mut expected: f32 = 0.0;
-    let n = numbers.len() as f32;
-    for i in 0..numbers.len() {
-        for j in 0..numbers.len() {
-            expected +=
-                std::hint::black_box(numbers[i].max(1.0).log2() * numbers[j].max(1.0).log2())
-                    / (n * n);
+fn calculate_cpu(emitters: &[Emitter], reflectors: &[Reflector]) -> Vec<Output> {
+    let mut output = vec![];
+    for i in 0..emitters.len() {
+        let mut best = Output {
+            reflector: INVALID_ID,
+            rssi: 0.0,
+        };
+        for j in 0..reflectors.len() {
+            let distance = (emitters[i].position - reflectors[j].position).norm();
+            let rssi = reflectors[j].rcs / distance.powi(4);
+            if rssi > best.rssi {
+                best = Output {
+                    reflector: j as u32,
+                    rssi,
+                };
+            }
         }
+        output.push(best);
     }
-    expected
+
+    output
 }
 
 struct ComputePass {
     compute_pipeline: wgpu::ComputePipeline,
     config_staging_buffer: wgpu::Buffer,
     config_storage_buffer: wgpu::Buffer,
-    items_staging_buffer: wgpu::Buffer,
-    items_storage_buffer: wgpu::Buffer,
+    emitter_staging_buffer: wgpu::Buffer,
+    emitter_storage_buffer: wgpu::Buffer,
+    reflector_staging_buffer: wgpu::Buffer,
+    reflector_storage_buffer: wgpu::Buffer,
     output_staging_buffer: wgpu::Buffer,
     output_storage_buffer: wgpu::Buffer,
 }
 
-async fn create_compute_pass(device: &wgpu::Device, len: usize) -> ComputePass {
+async fn create_compute_pass(device: &wgpu::Device) -> ComputePass {
+    let buf_size = 1024 * 1024;
+
     // Loads the shader from WGSL
     let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
@@ -96,11 +167,7 @@ async fn create_compute_pass(device: &wgpu::Device, len: usize) -> ComputePass {
         entry_point: "main",
     });
 
-    let config_size = std::mem::size_of::<u32>() as wgpu::BufferAddress;
-    let items_size = len as u64 * std::mem::size_of::<f32>() as wgpu::BufferAddress;
-    let output_size = (len * ((len + WORKGROUP_SIZE as usize - 1) / WORKGROUP_SIZE as usize))
-        as u64
-        * std::mem::size_of::<f32>() as wgpu::BufferAddress;
+    let config_size = std::mem::size_of::<Config>() as wgpu::BufferAddress;
 
     let config_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("config staging buffer"),
@@ -116,30 +183,44 @@ async fn create_compute_pass(device: &wgpu::Device, len: usize) -> ComputePass {
         mapped_at_creation: false,
     });
 
-    let items_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("items staging buffer"),
-        size: items_size,
+    let emitter_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("emitter staging buffer"),
+        size: buf_size,
         usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE,
         mapped_at_creation: false,
     });
 
-    let items_storage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("items storage buffer"),
-        size: items_size,
+    let emitter_storage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("emitter storage buffer"),
+        size: buf_size,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let reflector_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("reflector staging buffer"),
+        size: buf_size,
+        usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE,
+        mapped_at_creation: false,
+    });
+
+    let reflector_storage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("reflector storage buffer"),
+        size: buf_size,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
     let output_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("output staging buffer"),
-        size: output_size,
+        size: buf_size,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
 
     let output_storage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("output storage buffer"),
-        size: output_size,
+        size: buf_size,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
@@ -148,8 +229,10 @@ async fn create_compute_pass(device: &wgpu::Device, len: usize) -> ComputePass {
         compute_pipeline,
         config_staging_buffer,
         config_storage_buffer,
-        items_staging_buffer,
-        items_storage_buffer,
+        emitter_staging_buffer,
+        emitter_storage_buffer,
+        reflector_staging_buffer,
+        reflector_storage_buffer,
         output_staging_buffer,
         output_storage_buffer,
     }
@@ -159,8 +242,9 @@ async fn calculate_gpu(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     pass: &ComputePass,
-    numbers: &[f32],
-) -> f32 {
+    emitters: &[Emitter],
+    reflectors: &[Reflector],
+) -> Vec<Output> {
     let bind_group_layout = pass.compute_pipeline.get_bind_group_layout(0);
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
@@ -168,30 +252,46 @@ async fn calculate_gpu(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: pass.items_storage_buffer.as_entire_binding(),
+                resource: pass.config_storage_buffer.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: pass.output_storage_buffer.as_entire_binding(),
+                resource: pass.emitter_storage_buffer.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: pass.config_storage_buffer.as_entire_binding(),
+                resource: pass.reflector_storage_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: pass.output_storage_buffer.as_entire_binding(),
             },
         ],
     });
 
+    let config = Config {
+        num_emitters: emitters.len() as u32,
+        num_reflectors: reflectors.len() as u32,
+    };
+
     upload_buffer(
         device,
         &pass.config_staging_buffer,
-        bytemuck::cast_slice(&[numbers.len() as u32]),
+        bytemuck::bytes_of(&config),
     )
     .unwrap();
 
     upload_buffer(
         device,
-        &pass.items_staging_buffer,
-        bytemuck::cast_slice(numbers),
+        &pass.emitter_staging_buffer,
+        bytemuck::cast_slice(&emitters),
+    )
+    .unwrap();
+
+    upload_buffer(
+        device,
+        &pass.reflector_staging_buffer,
+        bytemuck::cast_slice(&reflectors),
     )
     .unwrap();
 
@@ -207,22 +307,27 @@ async fn calculate_gpu(
     );
 
     encoder.copy_buffer_to_buffer(
-        &pass.items_staging_buffer,
+        &pass.emitter_staging_buffer,
         0,
-        &pass.items_storage_buffer,
+        &pass.emitter_storage_buffer,
         0,
-        pass.items_storage_buffer.size(),
+        pass.emitter_storage_buffer.size(),
     );
 
+    encoder.copy_buffer_to_buffer(
+        &pass.reflector_staging_buffer,
+        0,
+        &pass.reflector_storage_buffer,
+        0,
+        pass.reflector_storage_buffer.size(),
+    );
+
+    let output_cols = (reflectors.len() as u32 + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
     {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
         cpass.set_pipeline(&pass.compute_pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
-        cpass.dispatch_workgroups(
-            (numbers.len() as u32 + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE,
-            numbers.len() as u32,
-            1,
-        );
+        cpass.dispatch_workgroups(output_cols, emitters.len() as u32, 1);
     }
 
     encoder.copy_buffer_to_buffer(
@@ -235,8 +340,27 @@ async fn calculate_gpu(
 
     let id = queue.submit(Some(encoder.finish()));
 
-    let data: Vec<f32> = download_buffer(&device, &pass.output_staging_buffer, id).unwrap();
-    data.iter().copied().sum()
+    let partial_outputs: Vec<Output> =
+        download_buffer(&device, &pass.output_staging_buffer, id).unwrap();
+    let mut outputs = Vec::new();
+    outputs.reserve(emitters.len());
+
+    for i in 0..emitters.len() {
+        let mut best = Output {
+            reflector: INVALID_ID,
+            rssi: 0.0,
+        };
+        for j in 0..output_cols {
+            let partial_output = partial_outputs[i * output_cols as usize + j as usize];
+            //println!("Emitter {i} col {j} = {partial_output:?}");
+            if partial_output.rssi > best.rssi {
+                best = partial_output;
+            }
+        }
+        outputs.push(best);
+    }
+
+    outputs
 }
 
 fn main() {
@@ -272,7 +396,7 @@ fn upload_buffer(
     data: &[u8],
 ) -> Result<(), wgpu::BufferAsyncError> {
     let (sender, receiver) = std::sync::mpsc::channel();
-    let buffer_slice = buffer.slice(..);
+    let buffer_slice = buffer.slice(..(data.len() as u64));
     buffer_slice.map_async(wgpu::MapMode::Write, move |v| {
         drop(sender.send(v));
     });
