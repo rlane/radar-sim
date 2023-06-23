@@ -7,30 +7,11 @@ const WORKGROUP_SIZE: u32 = 256;
 async fn run() {
     let numbers = (0..513).map(|x| x as f32).collect::<Vec<_>>();
 
-    execute_gpu(&numbers).await;
-}
-
-fn calculate_cpu(numbers: &[f32]) -> f64 {
-    let mut expected: f64 = 0.0;
-    for i in 0..numbers.len() {
-        for j in 0..numbers.len() {
-            expected += std::hint::black_box(numbers[i] * numbers[j]) as f64;
-        }
-    }
-    expected
-}
-
-async fn execute_gpu(numbers: &[f32]) {
-    // Instantiates instance of WebGPU
     let instance = wgpu::Instance::default();
-
-    // `request_adapter` instantiates the general connection to the GPU
     let mut opts = wgpu::RequestAdapterOptions::default();
     opts.power_preference = wgpu::PowerPreference::HighPerformance;
     let adapter = instance.request_adapter(&opts).await.unwrap();
 
-    // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
-    //  `features` being the available features.
     let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
@@ -43,26 +24,23 @@ async fn execute_gpu(numbers: &[f32]) {
         .await
         .unwrap();
 
-    let pass = create_radar_compute_pass(&device, numbers.len()).await;
+    let pass = create_compute_pass(&device, numbers.len()).await;
     let device = Arc::new(device);
 
-    let result = execute_gpu_inner(&device, &queue, &pass, numbers)
-        .await
-        .unwrap();
-    let sum = result.iter().copied().map(|x| x as f64).sum::<f64>();
-    println!("Result: {sum}",);
+    let result = calculate_gpu(&device, &queue, &pass, &numbers).await;
+    println!("Result: {result}",);
 
-    assert_eq!(sum, calculate_cpu(numbers));
+    assert_eq!(result, calculate_cpu(&numbers));
 
     for _ in 0..10 {
-        for gpu in [true, false] {
+        for gpu in [false, true] {
             let start_time = std::time::Instant::now();
             let mut i = 0;
             while start_time.elapsed() < std::time::Duration::from_secs(1) {
                 if gpu {
-                    let _ = execute_gpu_inner(&device, &queue, &pass, numbers).await;
+                    std::hint::black_box(calculate_gpu(&device, &queue, &pass, &numbers).await);
                 } else {
-                    std::hint::black_box(calculate_cpu(numbers));
+                    std::hint::black_box(calculate_cpu(&numbers));
                 }
                 i += 1;
             }
@@ -78,7 +56,17 @@ async fn execute_gpu(numbers: &[f32]) {
     }
 }
 
-struct RadarComputePass {
+fn calculate_cpu(numbers: &[f32]) -> f64 {
+    let mut expected: f64 = 0.0;
+    for i in 0..numbers.len() {
+        for j in 0..numbers.len() {
+            expected += std::hint::black_box(numbers[i] * numbers[j]) as f64;
+        }
+    }
+    expected
+}
+
+struct ComputePass {
     compute_pipeline: wgpu::ComputePipeline,
     config_staging_buffer: wgpu::Buffer,
     config_storage_buffer: wgpu::Buffer,
@@ -88,7 +76,7 @@ struct RadarComputePass {
     output_storage_buffer: wgpu::Buffer,
 }
 
-async fn create_radar_compute_pass(device: &wgpu::Device, len: usize) -> RadarComputePass {
+async fn create_compute_pass(device: &wgpu::Device, len: usize) -> ComputePass {
     // Loads the shader from WGSL
     let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
@@ -150,7 +138,7 @@ async fn create_radar_compute_pass(device: &wgpu::Device, len: usize) -> RadarCo
         mapped_at_creation: false,
     });
 
-    RadarComputePass {
+    ComputePass {
         compute_pipeline,
         config_staging_buffer,
         config_storage_buffer,
@@ -161,12 +149,12 @@ async fn create_radar_compute_pass(device: &wgpu::Device, len: usize) -> RadarCo
     }
 }
 
-async fn execute_gpu_inner(
+async fn calculate_gpu(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    pass: &RadarComputePass,
+    pass: &ComputePass,
     numbers: &[f32],
-) -> Option<Vec<f32>> {
+) -> f64 {
     let bind_group_layout = pass.compute_pipeline.get_bind_group_layout(0);
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
@@ -242,7 +230,7 @@ async fn execute_gpu_inner(
     let id = queue.submit(Some(encoder.finish()));
 
     let data: Vec<f32> = download_buffer(&device, &pass.output_staging_buffer, id).unwrap();
-    return Some(data);
+    data.iter().copied().map(|x| x as f64).sum::<f64>()
 }
 
 fn main() {
