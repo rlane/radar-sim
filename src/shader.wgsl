@@ -77,8 +77,8 @@ fn calculate(emitter_index: u32, reflector_index: u32) -> Output {
     let ray1 = vec2<f32>(cos(end_bearing), sin(end_bearing));
 
     if !is_clockwise(ray0, dp) && is_clockwise(ray1, dp) {
-        let distance = length(dp);
-        let rssi = reflector.rcs / pow(distance, 4.0);
+        let distance_squared = dot(dp, dp);
+        let rssi = reflector.rcs / (distance_squared * distance_squared);
         return Output(reflector_index, rssi);
     } else {
         return Output(INVALID_ID, 0.0);

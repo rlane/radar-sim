@@ -47,7 +47,7 @@ async fn run() {
         emitters.push(Emitter {
             position: vector![rng.gen_range(-1e3..1e3), rng.gen_range(-1e3..1e3)],
             angle: rng.gen_range(0.0..TAU),
-            beamwidth: rng.gen_range((TAU / 360.0)..TAU),
+            beamwidth: rng.gen_range((TAU / 360.0)..(TAU / 2.0)),
         });
     }
 
