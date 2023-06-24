@@ -326,7 +326,7 @@ async fn calculate_gpu(
         0,
         &pass.emitter_storage_buffer,
         0,
-        pass.emitter_storage_buffer.size(),
+        (emitters.len() * std::mem::size_of::<Emitter>()) as wgpu::BufferAddress,
     );
 
     encoder.copy_buffer_to_buffer(
@@ -334,7 +334,7 @@ async fn calculate_gpu(
         0,
         &pass.reflector_storage_buffer,
         0,
-        pass.reflector_storage_buffer.size(),
+        (reflectors.len() * std::mem::size_of::<Reflector>()) as wgpu::BufferAddress,
     );
 
     let output_cols = (reflectors.len() as u32 + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
@@ -355,8 +355,14 @@ async fn calculate_gpu(
 
     let id = queue.submit(Some(encoder.finish()));
 
-    let partial_outputs: Vec<Output> =
-        download_buffer(&device, &pass.output_staging_buffer, id).unwrap();
+    let partial_outputs: Vec<Output> = download_buffer(
+        &device,
+        &pass.output_staging_buffer,
+        id,
+        0,
+        emitters.len() * output_cols as usize * std::mem::size_of::<Output>(),
+    )
+    .unwrap();
     let mut outputs = Vec::new();
     outputs.reserve(emitters.len());
 
@@ -387,12 +393,14 @@ fn download_buffer<T>(
     device: &wgpu::Device,
     buffer: &wgpu::Buffer,
     id: SubmissionIndex,
+    offset: usize,
+    len: usize,
 ) -> Result<Vec<T>, wgpu::BufferAsyncError>
 where
     T: bytemuck::Pod,
 {
     let (sender, receiver) = std::sync::mpsc::channel();
-    let buffer_slice = buffer.slice(..);
+    let buffer_slice = buffer.slice((offset as u64)..(len as u64));
     buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
         drop(sender.send(v));
     });
