@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use nalgebra::{vector, Vector2};
+use nalgebra::{vector, Rotation2, Vector2};
 use rand::Rng;
 use std::borrow::Cow;
 use std::f32::consts::TAU;
@@ -117,21 +117,35 @@ async fn run() {
     }
 }
 
+fn is_clockwise(v0: Vector2<f32>, v1: Vector2<f32>) -> bool {
+    -v0.x * v1.y + v0.y * v1.x > 0.0
+}
+
 fn calculate_cpu(emitters: &[Emitter], reflectors: &[Reflector]) -> Vec<Output> {
     let mut output = vec![];
     for i in 0..emitters.len() {
+        let emitter = &emitters[i];
+        assert!(emitter.beamwidth <= TAU / 2.0);
+        let start_bearing = emitter.angle - 0.5 * emitter.beamwidth;
+        let end_bearing = emitter.angle + 0.5 * emitter.beamwidth;
+        let ray0 = Rotation2::new(start_bearing).transform_vector(&vector![1.0, 0.0]);
+        let ray1 = Rotation2::new(end_bearing).transform_vector(&vector![1.0, 0.0]);
+        assert!(is_clockwise(ray1, ray0));
+
         let mut best = Output {
             reflector: INVALID_ID,
             rssi: 0.0,
         };
         for j in 0..reflectors.len() {
-            let distance = (emitters[i].position - reflectors[j].position).norm();
-            let rssi = reflectors[j].rcs / distance.powi(4);
-            if rssi > best.rssi {
-                best = Output {
-                    reflector: j as u32,
-                    rssi,
-                };
+            let dp = reflectors[j].position - emitter.position;
+            if !is_clockwise(ray0, dp) && is_clockwise(ray1, dp) {
+                let rssi = reflectors[j].rcs / dp.norm().powi(4);
+                if rssi > best.rssi {
+                    best = Output {
+                        reflector: j as u32,
+                        rssi,
+                    };
+                }
             }
         }
         output.push(best);
@@ -449,7 +463,7 @@ fn test_basic() {
     let emitters = vec![Emitter {
         position: vector![0.0, 0.0],
         angle: 0.0,
-        beamwidth: TAU,
+        beamwidth: TAU / 4.0,
     }];
 
     let reflectors = vec![Reflector {
@@ -459,6 +473,7 @@ fn test_basic() {
     }];
 
     for gpu in [false, true] {
+        println!("GPU: {}", gpu);
         let outputs = calculate_for_test(&emitters, &reflectors, gpu);
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].reflector, 0);
@@ -471,8 +486,8 @@ fn test_position() {
     use assert_float_eq::*;
     let emitters = vec![Emitter {
         position: vector![1000.0, 0.0],
-        angle: 0.0,
-        beamwidth: TAU,
+        angle: TAU / 4.0,
+        beamwidth: TAU / 4.0,
     }];
 
     let reflectors = vec![Reflector {
@@ -482,6 +497,7 @@ fn test_position() {
     }];
 
     for gpu in [false, true] {
+        println!("GPU: {}", gpu);
         let outputs = calculate_for_test(&emitters, &reflectors, gpu);
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].reflector, 0);
@@ -493,29 +509,30 @@ fn test_position() {
 fn test_two_reflectors() {
     use assert_float_eq::*;
     let emitters = vec![Emitter {
-        position: vector![1000.0, 0.0],
+        position: vector![0.0, 0.0],
         angle: 0.0,
-        beamwidth: TAU,
+        beamwidth: TAU / 4.0,
     }];
 
     let reflectors = vec![
         Reflector {
-            position: vector![1000.0, 1000.0],
+            position: vector![1000.0, 200.0],
             rcs: 1.0,
             pad: 0.0,
         },
         Reflector {
-            position: vector![1000.0, 500.0],
+            position: vector![1000.0, 100.0],
             rcs: 1.0,
             pad: 0.0,
         },
     ];
 
     for gpu in [false, true] {
+        println!("GPU: {}", gpu);
         let outputs = calculate_for_test(&emitters, &reflectors, gpu);
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].reflector, 1);
-        assert_float_relative_eq!(outputs[0].rssi, 1.6e-11);
+        assert_float_relative_eq!(outputs[0].rssi, 9.80296e-13, 1e-3);
     }
 }
 
@@ -525,7 +542,7 @@ fn test_rcs() {
     let emitters = vec![Emitter {
         position: vector![0.0, 0.0],
         angle: 0.0,
-        beamwidth: TAU,
+        beamwidth: TAU / 4.0,
     }];
 
     let reflectors = vec![
@@ -542,6 +559,7 @@ fn test_rcs() {
     ];
 
     for gpu in [false, true] {
+        println!("GPU: {}", gpu);
         let outputs = calculate_for_test(&emitters, &reflectors, gpu);
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].reflector, 1);
@@ -555,13 +573,13 @@ fn test_two_emitters() {
     let emitters = vec![
         Emitter {
             position: vector![1000.0, 0.0],
-            angle: 0.0,
-            beamwidth: TAU,
+            angle: TAU / 2.0,
+            beamwidth: TAU / 4.0,
         },
         Emitter {
             position: vector![2000.0, 0.0],
             angle: 0.0,
-            beamwidth: TAU,
+            beamwidth: TAU / 4.0,
         },
     ];
 
@@ -579,6 +597,7 @@ fn test_two_emitters() {
     ];
 
     for gpu in [false, true] {
+        println!("GPU: {}", gpu);
         let outputs = calculate_for_test(&emitters, &reflectors, gpu);
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].reflector, 0);
@@ -592,9 +611,9 @@ fn test_two_emitters() {
 fn test_beam() {
     use assert_float_eq::*;
     let emitters = vec![Emitter {
-        position: vector![1000.0, 0.0],
+        position: vector![0.0, 0.0],
         angle: 0.0,
-        beamwidth: TAU / 4.0,
+        beamwidth: TAU / 8.0,
     }];
 
     let reflectors = vec![
@@ -604,17 +623,18 @@ fn test_beam() {
             pad: 0.0,
         },
         Reflector {
-            position: vector![1000.0, 500.0],
+            position: vector![10000.0, 0.0],
             rcs: 1.0,
             pad: 0.0,
         },
     ];
 
     for gpu in [false, true] {
+        println!("GPU: {}", gpu);
         let outputs = calculate_for_test(&emitters, &reflectors, gpu);
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].reflector, 1);
-        assert_float_relative_eq!(outputs[0].rssi, 1.6e-11);
+        assert_float_relative_eq!(outputs[0].rssi, 1e-16);
     }
 }
 
@@ -629,7 +649,7 @@ fn test_random() {
         emitters.push(Emitter {
             position: vector![rng.gen_range(-1e3..1e3), rng.gen_range(-1e3..1e3)],
             angle: rng.gen_range(0.0..TAU),
-            beamwidth: rng.gen_range((TAU / 360.0)..TAU),
+            beamwidth: rng.gen_range((TAU / 360.0)..(TAU / 2.0)),
         });
     }
 
