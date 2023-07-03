@@ -754,6 +754,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "radar-sim"
+version = "0.1.0"
+dependencies = [
+ "assert_float_eq",
+ "bytemuck",
+ "env_logger",
+ "futures-intrusive",
+ "nalgebra",
+ "pollster",
+ "rand",
+ "wgpu",
+]
+
+[[package]]
 name = "rand"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1168,20 +1182,6 @@ dependencies = [
  "web-sys",
  "wgpu-types",
  "winapi",
-]
-
-[[package]]
-name = "wgpu-testing"
-version = "0.1.0"
-dependencies = [
- "assert_float_eq",
- "bytemuck",
- "env_logger",
- "futures-intrusive",
- "nalgebra",
- "pollster",
- "rand",
- "wgpu",
 ]
 
 [[package]]
